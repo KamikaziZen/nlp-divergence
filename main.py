@@ -197,7 +197,7 @@ def main(args: Namespace):
     # for each sample text take log of probs and summ them
     p_logsums = np.array([np.log(p).sum() for p in p_probs])
 
-    if args.model2 != args.model1:
+    if args.model2 is not None and args.model2 != args.model1:
         model = AutoModelForCausalLM.from_pretrained(
             args.model2,
             quantization_config=quantization_config if 'llama' in args.model2.lower() else None,
@@ -206,16 +206,26 @@ def main(args: Namespace):
             use_cache=False
         )
 
-    q_probs = get_probs(model, texts, args.prompt2, args.system2)
-    q_logsums = np.array([np.log(q).sum() for q in q_probs])
-
     if args.metric == 'kl':
+        q_probs = get_probs(model, texts, args.prompt2, args.system2)
+        q_logsums = np.array([np.log(q).sum() for q in q_probs])
+
         kls = p_logsums - q_logsums
     elif args.metric == 'js':
-        m_probs = [0.5 * (p_probs[i] + q_probs[i]) for i in range(len(p_probs))]
-        # or: np.log(m).sum() - len(m)*log(2) without 0.5 in m_probs
-        m_logsums = np.array([np.log(m).sum() for m in m_probs])
-        jss = p_logsums - m_logsums
+        # or just use np.float128?
+        # p_logsums_minus = p_logsums - p_logsums.max()
+        # p_probs_minus = np.exp(p_logsums_minus)
+
+        q_probs = get_probs(model, texts, args.prompt2, args.system2)
+        q_logsums = np.array([np.log(q).sum() for q in q_probs])
+        # q_logsums_minus = q_logsums - p_logsums.max()
+        # q_probs_minus = np.exp(q_logsums_minus)
+        
+        # m_logsums = p_logsums.max() - np.log(2) + \
+        #             np.log(p_probs_minus + q_probs_minus)
+
+        # jss = p_logsums - m_logsums
+        jss = - np.exp(q_logsums - p_logsums)
 
         texts = generate(
             model,
@@ -226,6 +236,8 @@ def main(args: Namespace):
 
         q_probs = get_probs(model, texts, args.prompt2, args.system2)
         q_logsums = np.array([np.log(q).sum() for q in q_probs])
+        # q_logsums_minus = q_logsums - q_logsums.max()
+        # q_probs_minus = np.exp(q_logsums_minus)
 
         if args.model2 != args.model1:
             model = AutoModelForCausalLM.from_pretrained(
@@ -237,11 +249,17 @@ def main(args: Namespace):
             )
 
         p_probs = get_probs(model, texts, args.prompt1, args.system1)
-        m_probs = [0.5 * (p_probs[i] + q_probs[i]) for i in range(len(p_probs))]
-        m_logsums = np.array([np.log(m).sum() for m in m_probs])
-        jss += q_logsums - m_logsums
+        p_logsums = np.array([np.log(p).sum() for p in p_probs])
+        # p_logsums_minus = p_logsums - q_logsums.max()
+        # p_probs_minus = np.exp(p_logsums_minus)
 
-        jss *= 0.5
+        # m_logsums = q_logsums.max() - np.log(2) + \
+        #             np.log(p_probs_minus + q_probs_minus)
+        
+        # jss += q_logsums - m_logsums
+        # jss -= 
+
+        # jss *= 0.5
 
     data = {
         'model1': args.model1,
@@ -250,6 +268,7 @@ def main(args: Namespace):
         'num_samples': args.num_samples,
         'kls': None if args.metric != 'kl' else kls.tolist(),
         'jss': None if args.metric != 'js' else jss.tolist(),
+        'ent': None if args.metric != 'ent' else (-p_logsums).tolist(),
         'prompt1': args.prompt1,
         'prompt2': args.prompt2,
         'system1': args.system1,
